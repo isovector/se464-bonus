@@ -3,24 +3,25 @@ trait Expr {
 }
 
 case class Neg(ghs: Expr) extends Expr {
-    override def map(λ: Expr => Expr): Expr = {
+    // Unary operator should recurse map down its argument
+    override def map(λ: Expr => Expr): Expr =
         λ(Neg(ghs.map(λ)))
-    }
 }
 
 abstract class BinaryExpr extends Expr {
     val lhs: Expr
     val rhs: Expr
 
+    // Binary operators should recurse map down both sides
     override def map(λ: Expr => Expr): Expr = {
         val args = (lhs.map(λ), rhs.map(λ))
-        this match {
-            case _: Add => Add.tupled(args)
-            case _: Sub => Sub.tupled(args)
-            case _: Mul => Mul.tupled(args)
-            case _: Div => Div.tupled(args)
+        (this match {
+            case _: Add => Add
+            case _: Sub => Sub
+            case _: Mul => Mul
+            case _: Div => Div
             case _      => throw new Exception("danger! danger!")
-        }
+        }).tupled(args)
     }
 }
 
@@ -46,10 +47,13 @@ object Entrance {
     def substitute(tree: Expr, subs: Map[String, Int]): Double =
         evaluate(tree.map { branch =>
             branch match {
+                // Replace variables with their subs, if we have one
                 case x@Var(name) => subs.get(name) match {
                     case Some(value) => Val(value)
                     case _           => x
                 }
+
+                // Do nothing otherwise
                 case x           => x
             }
         })
