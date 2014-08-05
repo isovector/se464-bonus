@@ -1,105 +1,113 @@
-trait Expression {
-    def map[T](λ: Expression => T): T = λ(this)
+trait Expr {
+    def map(λ: Expr => Expr) = λ(this)
 }
 
-case class Val(value: Int) extends Expression
-case class Var(name: String) extends Expression
-case class NegOp(ghs: Expression) extends Expression
-case class AddOp(lhs: Expression, rhs: Expression) extends Expression
-case class SubOp(lhs: Expression, rhs: Expression) extends Expression
-case class MulOp(lhs: Expression, rhs: Expression) extends Expression
-case class DivOp(lhs: Expression, rhs: Expression) extends Expression
+case class Neg(ghs: Expr) extends Expr {
+    override def map(λ: Expr => Expr): Expr = {
+        λ(Neg(ghs.map(λ)))
+    }
+}
+
+abstract class BinaryExpr extends Expr {
+    val lhs: Expr
+    val rhs: Expr
+
+    override def map(λ: Expr => Expr): Expr = {
+        val args = (lhs.map(λ), rhs.map(λ))
+        this match {
+            case _: Add => Add.tupled(args)
+            case _: Sub => Sub.tupled(args)
+            case _: Mul => Mul.tupled(args)
+            case _: Div => Div.tupled(args)
+            case _      => throw new Exception("danger! danger!")
+        }
+    }
+}
+
+case class Val(value: Int) extends Expr
+case class Var(name: String) extends Expr
+case class Add(lhs: Expr, rhs: Expr) extends BinaryExpr
+case class Sub(lhs: Expr, rhs: Expr) extends BinaryExpr
+case class Mul(lhs: Expr, rhs: Expr) extends BinaryExpr
+case class Div(lhs: Expr, rhs: Expr) extends BinaryExpr
 
 object Entrance {
-    def evaluate(tree: Expression): Double = tree match {
+    def evaluate(tree: Expr): Double = tree match {
         case Val(value)         => value.asInstanceOf[Double]
         case Var(_)             => throw new Exception("unable to evaluate variable")
-        case NegOp(ghs)         => -evaluate(ghs)
-        case AddOp(lhs, rhs)    => evaluate(lhs) + evaluate(rhs)
-        case SubOp(lhs, rhs)    => evaluate(lhs) - evaluate(rhs)
-        case MulOp(lhs, rhs)    => evaluate(lhs) * evaluate(rhs)
-        case DivOp(lhs, rhs)    => evaluate(lhs) / evaluate(rhs)
+        case Neg(ghs)         => -evaluate(ghs)
+        case Add(lhs, rhs)    => evaluate(lhs) + evaluate(rhs)
+        case Sub(lhs, rhs)    => evaluate(lhs) - evaluate(rhs)
+        case Mul(lhs, rhs)    => evaluate(lhs) * evaluate(rhs)
+        case Div(lhs, rhs)    => evaluate(lhs) / evaluate(rhs)
     }
 
 
-    def substitute(
-        tree: Expression,
-        subs: Map[String, Int]
-    ): Double = {
-        def remap(subtree: Expression): Expression =
-            subtree.map {
-                // Traverse the tree, searching for variables to replace
-                case x: Val => x
-                case x@Var(name) =>
-                    subs.get(name) match {
-                        case Some(value)    => Val(value)
-                        case None           => x
-                    }
-                case NegOp(x) => NegOp(x.map(remap))
-                case AddOp(l, r) => AddOp(l.map(remap), r.map(remap))
-                case SubOp(l, r) => SubOp(l.map(remap), r.map(remap))
-                case MulOp(l, r) => MulOp(l.map(remap), r.map(remap))
-                case DivOp(l, r) => DivOp(l.map(remap), r.map(remap))
+    def substitute(tree: Expr, subs: Map[String, Int]): Double =
+        evaluate(tree.map { branch =>
+            branch match {
+                case x@Var(name) => subs.get(name) match {
+                    case Some(value) => Val(value)
+                    case _           => x
+                }
+                case x           => x
             }
-
-        evaluate(remap(tree))
-    }
+        })
 
 
-    def simplify(tree: Expression): Expression = tree match {
+    def simplify(tree: Expr): Expr = tree match {
         // Can't simplify terminals
         case x: Val => x
         case x: Var => x
 
-        case NegOp(ghs) =>
+        case Neg(ghs) =>
             simplify(ghs) match {
                 // Double negative
-                case NegOp(x)   => x
+                case Neg(x)   => x
 
                 // No simplification possible
-                case x          => NegOp(x)
+                case x          => Neg(x)
             }
 
-        case AddOp(lhs, rhs) =>
+        case Add(lhs, rhs) =>
             (simplify(lhs), simplify(rhs)) match {
                 // Adding 0
                 case (Val(0), r)        => r
                 case (l, Val(0))        => l
 
                 // Addition of negative
-                case (l, NegOp(ghs))    => SubOp(l, ghs)
+                case (l, Neg(ghs))    => Sub(l, ghs)
 
                 // Factor
-                case (MulOp(a, x), MulOp(b, y))
-                              if x == y => MulOp(AddOp(a, b), x)
-                case (MulOp(a, x), MulOp(y, b))
-                              if x == y => MulOp(AddOp(a, b), x)
-                case (MulOp(x, a), MulOp(b, y))
-                              if x == y => MulOp(AddOp(a, b), x)
-                case (MulOp(x, a), MulOp(y, b))
-                              if x == y => MulOp(AddOp(a, b), x)
+                case (Mul(a, x), Mul(b, y))
+                              if x == y => Mul(Add(a, b), x)
+                case (Mul(a, x), Mul(y, b))
+                              if x == y => Mul(Add(a, b), x)
+                case (Mul(x, a), Mul(b, y))
+                              if x == y => Mul(Add(a, b), x)
+                case (Mul(x, a), Mul(y, b))
+                              if x == y => Mul(Add(a, b), x)
 
                 // Group like terms
-                case (l, r) if l == r   => MulOp(Val(2), l)
+                case (l, r) if l == r   => Mul(Val(2), l)
 
                 // No simplification possible
-                case (l, r)             => AddOp(l, r)
-
+                case (l, r)             => Add(l, r)
         }
 
-        case SubOp(lhs, rhs) =>
+        case Sub(lhs, rhs) =>
             (simplify(lhs), simplify(rhs)) match {
                 // Subtract 0
                 case (l, Val(0))        => l
 
                 // Unary minus
-                case (Val(0), r)        => NegOp(r)
+                case (Val(0), r)        => Neg(r)
 
                 // Subtract oneself
                 case (x, y) if x == y   => Val(0)
             }
 
-        case MulOp(lhs, rhs) =>
+        case Mul(lhs, rhs) =>
             (simplify(lhs), simplify(rhs)) match {
                 // Times 0
                 case (Val(0), _) => Val(0)
@@ -110,26 +118,26 @@ object Entrance {
                 case (x, Val(1)) => x
 
                 // No simplification possible
-                case (l, r)      => MulOp(l, r)
+                case (l, r)      => Mul(l, r)
             }
 
-        case DivOp(lhs, rhs)    =>
+        case Div(lhs, rhs)    =>
             (simplify(lhs), simplify(rhs)) match {
                 // Division by 1
                 case (x, Val(1))                => x
 
                 // Cancelation
-                case (MulOp(x, g), y) if x == y => g
-                case (MulOp(g, x), y) if x == y => g
+                case (Mul(x, g), y) if x == y => g
+                case (Mul(g, x), y) if x == y => g
 
                 // No simplification possible
-                case (l, r)                     => DivOp(l, r)
+                case (l, r)                     => Div(l, r)
             }
     }
 
     def main(args: Array[String]) = {
         println(evaluate(
-            MulOp(NegOp(AddOp(Val(5), Val(6))), Var("x"))
+            Mul(Neg(Add(Val(5), Val(6))), Var("x"))
         ))
     }
 }
